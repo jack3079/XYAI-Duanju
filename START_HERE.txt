@@ -1,0 +1,32 @@
+小鱼 P2 可执行起点（已通过自动测试，无占位模型）
+
+一、部署独立平台“小鱼智算中心”
+  Windows 本机验证：进入 compute-center，双击 start_windows.bat。
+  公网正式部署：先将域名 A/AAAA 记录指向服务器，再运行：
+    PowerShell -ExecutionPolicy Bypass -File compute-center\Start_Docker.ps1 https://你的域名
+  打开 https://你的域名/admin，使用首次启动显示的管理员令牌。
+
+二、录入真实外部 AI 供应商
+  管理台依次配置真实渠道，并为高质量 / 标准 / 省钱三种模式绑定：
+  text.script、text.review、text.director、text.general、image.generate、video.generate、audio.speech。
+  每条路由必须填写用户价格与供应商成本；系统会生成不可变策略版本并显示生产就绪状态。
+  未配齐真实模型时，客户端会禁用对应质量模式，不会伪造生成结果。
+
+三、创建用户并充值
+  在“用户与充值”创建客户账号；收到款项后按真实付款流水号增加算力点。
+  所有帮助、充值和部署服务统一联系微信：echo169369。
+
+四、构建“小鱼Ai短剧生成系统”Windows 安装 EXE
+  双击 Build_Xiaoyu_Drama_Auto.cmd，输入已部署的小鱼智算中心 HTTPS 根地址。
+  脚本会取得锁定 ToonFlow 源码、校验提交和文件哈希、应用 P2 补丁、执行类型检查并构建安装包。
+  输出目录：_xiaoyu_build\Toonflow-app\dist
+
+P2 关键能力：
+  - 项目级高质量 / 标准 / 省钱模式
+  - 项目锁定不可变策略版本
+  - 生成前费用预估和余额判断
+  - 请求内容哈希幂等，防重复扣费
+  - 设备 Token AES-256-GCM 本机加密，旧明文自动迁移
+  - 退出时远程撤销设备 Token
+  - 策略生产就绪、缺失能力、停用线路和单线路风险检查
+  - 任务收入、供应商成本、毛利和策略版本全链路可追溯
