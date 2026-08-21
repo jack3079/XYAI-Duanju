@@ -1,1 +1,0 @@
-P8.1 GA Acceptance branch anchor. This file is replaced by the clean source tree commit.
