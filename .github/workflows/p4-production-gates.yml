@@ -1,0 +1,59 @@
+name: P4 Production Gates
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      build_windows:
+        description: Build Windows setup.exe
+        type: boolean
+        default: false
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install -g yarn@1.22.22
+      - run: pip install pytest
+      - run: pytest -q
+      - name: Fetch locked source
+        run: |
+          mkdir -p _ci
+          git clone --no-checkout https://github.com/HBAI-Ltd/Toonflow-app.git _ci/app
+          git -C _ci/app fetch --depth 1 origin bc61ec7a1b5df31293b286981a5f4ad4635464ee
+          git -C _ci/app checkout --detach FETCH_HEAD
+          git clone --no-checkout https://github.com/HBAI-Ltd/Toonflow-web.git _ci/web
+          git -C _ci/web fetch --depth 1 origin 9c4cb0ec7d4f6b4067c7768e2df8cdc7f8587214
+          git -C _ci/web checkout --detach FETCH_HEAD
+      - name: Apply twice and verify idempotency
+        run: |
+          python tools/apply_toonflow_patch.py --app-root _ci/app --web-root _ci/web --compute-center-url http://127.0.0.1:8000
+          python tools/apply_toonflow_patch.py --app-root _ci/app --web-root _ci/web --compute-center-url http://127.0.0.1:8000
+          python tools/verify_toonflow_patch.py --app-root _ci/app --web-root _ci/web
+      - name: Build Web
+        run: cd _ci/web && yarn install --frozen-lockfile && yarn type-check && yarn build
+      - name: Typecheck and build desktop backend
+        run: cd _ci/app && yarn install --frozen-lockfile && yarn lint && yarn build
+  windows-installer:
+    if: github.event_name == 'workflow_dispatch' && inputs.build_windows
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install -g yarn@1.22.22
+      - name: Build setup.exe
+        shell: powershell
+        run: .\Build_Xiaoyu_Drama_Auto.ps1 -ComputeCenterUrl 'https://compute.invalid.example'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Xiaoyu-AI-Drama-P4-Windows
+          path: _xiaoyu_build/Toonflow-app/dist/*setup.exe
+          if-no-files-found: error

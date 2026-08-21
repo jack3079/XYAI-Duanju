@@ -1,9 +1,12 @@
 @echo off
-setlocal EnableExtensions
-set "CENTER_URL=%~1"
-if not defined CENTER_URL (
-  set /p "CENTER_URL=请输入小鱼智算中心 HTTPS 根地址："
+chcp 65001 >nul
+setlocal
+set /p XIAOYU_CENTER=请输入小鱼智算中心HTTPS地址（例如 https://api.example.com）: 
+if "%XIAOYU_CENTER%"=="" (
+  echo 地址不能为空。帮助请联系微信：echo169369
+  pause
+  exit /b 1
 )
-if not defined CENTER_URL exit /b 2
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0Build_Xiaoyu_Drama_Auto.ps1" -ComputeCenterUrl "%CENTER_URL%"
-exit /b %ERRORLEVEL%
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0Build_Xiaoyu_Drama_Auto.ps1" "%XIAOYU_CENTER%"
+if errorlevel 1 pause
+endlocal

@@ -4,19 +4,8 @@ param(
     [Parameter(Mandatory = $true)][string]$ComputeCenterUrl,
     [switch]$DryRun
 )
-$ErrorActionPreference = "Stop"
-$python = Get-Command py -ErrorAction SilentlyContinue
-if ($python) {
-    $runner = @("-3", (Join-Path $PSScriptRoot "tools\apply_toonflow_patch.py"))
-} else {
-    $python = Get-Command python -ErrorAction Stop
-    $runner = @((Join-Path $PSScriptRoot "tools\apply_toonflow_patch.py"))
-}
-$argsList = $runner + @(
-    "--app-root", (Resolve-Path $AppRoot).Path,
-    "--web-root", (Resolve-Path $WebRoot).Path,
-    "--compute-center-url", $ComputeCenterUrl
-)
-if ($DryRun) { $argsList += "--dry-run" }
-& $python.Source @argsList
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Write-Warning 'P2 补丁已被 P4 生产补丁替代，正在执行 P4。'
+$params = @{ AppRoot = $AppRoot; WebRoot = $WebRoot; ComputeCenterUrl = $ComputeCenterUrl }
+if ($DryRun) { $params.DryRun = $true }
+& (Join-Path $PSScriptRoot 'Apply_Xiaoyu_P4.ps1') @params
+exit $LASTEXITCODE
