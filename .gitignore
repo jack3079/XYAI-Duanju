@@ -2,6 +2,7 @@ _xiaoyu_build/
 node_modules/
 dist/
 build/
+.cache/
 .venv/
 __pycache__/
 .pytest_cache/

@@ -1,0 +1,41 @@
+name: P4 Bootstrap Source
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  expand-source:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'p4-production-dag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+      - name: Verify and expand P4 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '926d4692f34c914aa4287a1ee97822b1db35c636e750c846424685c3cc78e04d  .p4-bootstrap/p4_overlay_payload.zip' | sha256sum -c -
+          unzip -o .p4-bootstrap/p4_overlay_payload.zip
+          rm -rf .p4-bootstrap
+          rm -f .github/workflows/p4-bootstrap.yml
+          test -s toonflow-overlay/app/src/xiaoyu/pipeline/service.ts
+          test -s toonflow-overlay/app/src/xiaoyu/pipeline/executors.ts
+          test -s toonflow-overlay/web/src/views/xiaoyu/pipeline/index.vue
+      - name: Commit expanded source
+        shell: bash
+        env:
+          HEAD_BRANCH: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          git config user.name 'xiaoyu-build-bot'
+          git config user.email 'xiaoyu-build-bot@users.noreply.github.com'
+          git add -A
+          git commit -m 'feat(p4): expand one-click production DAG source'
+          git push origin HEAD:${HEAD_BRANCH}
