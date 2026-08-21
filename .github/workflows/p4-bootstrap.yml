@@ -11,7 +11,7 @@ permissions:
 jobs:
   expand-source:
     if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'p4-production-dag'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
