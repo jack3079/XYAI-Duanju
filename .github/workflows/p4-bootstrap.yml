@@ -1,20 +1,21 @@
 name: P4 Bootstrap Source
 
 on:
-  push:
-    branches: [p4-production-dag]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
 
 jobs:
   expand-source:
-    if: contains(github.event.head_commit.message, '[P4-BOOTSTRAP]')
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'p4-production-dag'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: p4-production-dag
+          ref: ${{ github.head_ref }}
           fetch-depth: 0
       - name: Verify and expand P4 source
         shell: bash
@@ -29,10 +30,12 @@ jobs:
           test -s toonflow-overlay/web/src/views/xiaoyu/pipeline/index.vue
       - name: Commit expanded source
         shell: bash
+        env:
+          HEAD_BRANCH: ${{ github.head_ref }}
         run: |
           set -euo pipefail
           git config user.name 'xiaoyu-build-bot'
           git config user.email 'xiaoyu-build-bot@users.noreply.github.com'
           git add -A
           git commit -m 'feat(p4): expand one-click production DAG source'
-          git push origin HEAD:p4-production-dag
+          git push origin HEAD:${HEAD_BRANCH}
