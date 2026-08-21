@@ -11,7 +11,7 @@ on:
         default: false
 jobs:
   verify:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -41,7 +41,7 @@ jobs:
         run: cd _ci/app && yarn install --frozen-lockfile && yarn lint && yarn build
   windows-installer:
     if: github.event_name == 'workflow_dispatch' && inputs.build_windows
-    runs-on: windows-2022
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
