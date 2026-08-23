@@ -14,7 +14,7 @@ const itemSchema = z.object({
   vendorId: z.string().nullable(),
   desc: z.string(),
   temperature: z.number().finite().optional(),
-  maxOutputTokens: z.number().int().positive().optional(),
+  maxOutputTokens: z.number().int().nonnegative().optional(),
 });
 
 export default router.post(
@@ -31,7 +31,6 @@ export default router.post(
       const missingIds = ids.filter((id: number) => !existingIds.has(id));
       if (missingIds.length) return res.status(404).send(error(`以下 Agent 配置已不存在，请刷新页面：${missingIds.join("、")}`));
 
-      // 先在事务外验证 Provider/模型，避免把无效或已停用模型写进 Agent 配置。
       const normalized = [] as any[];
       for (const item of items) {
         normalized.push({ ...item, ...(await normalizeAgentModelSelection(item.vendorId, item.model, item.modelName)) });

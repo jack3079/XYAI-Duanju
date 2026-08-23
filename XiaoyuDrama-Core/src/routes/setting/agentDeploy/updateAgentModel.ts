@@ -17,7 +17,7 @@ export default router.post(
     vendorId: z.string().nullable(),
     desc: z.string(),
     temperature: z.number().finite().optional(),
-    maxOutputTokens: z.number().int().positive().optional(),
+    maxOutputTokens: z.number().int().nonnegative().optional(),
   }),
   async (req, res) => {
     try {
