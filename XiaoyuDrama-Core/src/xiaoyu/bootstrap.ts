@@ -5,6 +5,7 @@ import { XIAOYU_BRAND } from "./brand";
 import { migrateXiaoyuCredential } from "./secureCredential";
 import { ensureXiaoyuPipelineSchema } from "./pipeline/database";
 import { xiaoyuPipelineEngine } from "./pipeline/engine";
+import { recoverInterruptedLocalWork } from "./maintenance/recoverInterruptedLocalWork";
 
 const modelByAgentKey: Record<string, { alias: string; name: string }> = {
   scriptAgent: { alias: "xy-script-creative", name: "小鱼自动编剧" },
@@ -72,6 +73,16 @@ const xiaoyuBootstrapRuntimeState = globalThis as XiaoyuBootstrapRuntimeState;
 
 async function bootstrapXiaoyuInternal(): Promise<void> {
   await ensureXiaoyuPipelineSchema();
+
+  // 当前 Node 进程启动时，旧进程中的本地 Promise 不可能继续执行。
+  // 将遗留“生成中”任务显式转为失败，避免 UI/服务端永远认为轨道仍被占用。
+  // 仍有未结算远程视频 job 的记录会被保留，交给 remoteRecovery 继续结算。
+  const recovered = await recoverInterruptedLocalWork();
+  const recoveredCount = recovered.tasks + recovered.videos + recovered.tracks + recovered.storyboards + recovered.images + recovered.assetPrompts;
+  if (recoveredCount > 0) {
+    console.warn("[xiaoyu] 已恢复上次异常中断的本地生成状态", recovered);
+  }
+
   await cleanupLegacyAutoBindings();
   const legacyVendorId = ["to", "on", "flow"].join("");
   await db("o_vendorConfig").whereIn("id", [legacyVendorId, "xiaoyu_ai_drama"]).delete();
