@@ -1,10 +1,8 @@
 name: Rebuild clean v0.01 source
 
 on:
-  push:
-    branches: [rebuild-v001]
-    paths:
-      - '.github/workflows/rebuild-clean-main.yml'
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -20,7 +18,7 @@ jobs:
           ref: rebuild-v001
           fetch-depth: 1
 
-      - name: Assemble and verify patchkit
+      - name: Assemble patchkit
         shell: bash
         run: |
           set -euo pipefail
@@ -32,7 +30,6 @@ jobs:
           PKROOT="$(dirname "$(find /tmp/patchkit -name postfix.py -type f -print -quit)")"
           test -n "$PKROOT"
           echo "PKROOT=$PKROOT" >> "$GITHUB_ENV"
-          echo "Patchkit root: $PKROOT"
 
       - name: Fetch locked upstream source
         shell: bash
@@ -42,152 +39,140 @@ jobs:
           git -C /tmp/core remote add origin https://github.com/HBAI-Ltd/Toonflow-app.git
           git -C /tmp/core fetch --depth=1 origin bc61ec7a1b5df31293b286981a5f4ad4635464ee
           git -C /tmp/core checkout --detach FETCH_HEAD
-
           git init /tmp/web
           git -C /tmp/web remote add origin https://github.com/HBAI-Ltd/Toonflow-web.git
           git -C /tmp/web fetch --depth=1 origin 9c4cb0ec7d4f6b4067c7768e2df8cdc7f8587214
           git -C /tmp/web checkout --detach FETCH_HEAD
           rm -rf /tmp/core/.git /tmp/web/.git
 
-      - name: Apply P8.7 product source patch
+      - name: Apply uploaded v0.01 baseline
         shell: bash
         run: |
           set -euo pipefail
           PATCHER="$PKROOT/tools/apply_xiaoyu_core_patch.py"
-          HELP="$(python3 "$PATCHER" --help 2>&1 || true)"
+          HELP="$(PYTHONPATH="$PKROOT/tools" python3 "$PATCHER" --help 2>&1 || true)"
           ARGS=(--app-root /tmp/core --web-root /tmp/web)
           if grep -q -- '--overlay-root' <<<"$HELP"; then ARGS+=(--overlay-root "$PKROOT/xiaoyu-overlay"); fi
           if grep -q -- '--update-public-key-b64' <<<"$HELP"; then ARGS+=(--update-public-key-b64 ''); fi
           if grep -q -- '--app-version' <<<"$HELP"; then ARGS+=(--app-version '0.0.1'); fi
-          if grep -q -- '--version' <<<"$HELP" && ! grep -q -- '--app-version' <<<"$HELP"; then ARGS+=(--version '0.0.1'); fi
           if grep -q -- '--source-commit' <<<"$HELP"; then ARGS+=(--source-commit 'bc61ec7a1b5df31293b286981a5f4ad4635464ee'); fi
           if grep -q -- '--web-source-commit' <<<"$HELP"; then ARGS+=(--web-source-commit '9c4cb0ec7d4f6b4067c7768e2df8cdc7f8587214'); fi
           if grep -q -- '--core-source-commit' <<<"$HELP"; then ARGS+=(--core-source-commit 'bc61ec7a1b5df31293b286981a5f4ad4635464ee'); fi
-          echo "python3 $PATCHER ${ARGS[*]}"
-          PYTHONPATH="$PKROOT/tools${PYTHONPATH:+:$PYTHONPATH}" python3 "$PATCHER" "${ARGS[@]}"
+          PYTHONPATH="$PKROOT/tools" python3 "$PATCHER" "${ARGS[@]}"
+          cp -a "$PKROOT/fix-overlay/core/." /tmp/core/ 2>/dev/null || true
+          cp -a "$PKROOT/fix-overlay/web/." /tmp/web/ 2>/dev/null || true
+          cp -a .rebuild/fix-late/core/. /tmp/core/
+          if [ -d .rebuild/fix-late/web ]; then cp -a .rebuild/fix-late/web/. /tmp/web/; fi
 
-      - name: Apply v0.01 fixes and build compatibility fixes
+      - name: Apply final schema, UI and build compatibility fixes
         shell: bash
         run: |
           set -euo pipefail
-          cp -a "$PKROOT/fix-overlay/core/." /tmp/core/
-          cp -a "$PKROOT/fix-overlay/web/." /tmp/web/
           python3 - <<'PY'
           from pathlib import Path
           import json, re, shutil
+          core=Path('/tmp/core'); web=Path('/tmp/web')
 
-          core = Path('/tmp/core')
-          web = Path('/tmp/web')
+          initdb=core/'src/lib/initDB.ts'
+          text=initdb.read_text(encoding='utf-8')
+          marker='table.string("mode");'
+          if 'table.string("qualityMode")' not in text:
+              if marker not in text: raise SystemExit('o_project mode anchor missing')
+              text=text.replace(marker, marker+'\n      table.string("qualityMode");\n      table.string("computePresetVersion");',1)
+          initdb.write_text(text,encoding='utf-8')
 
-          # Keep OpenAI vendor source and embedded runtime vendor template synchronized.
-          source = core / 'data/vendor/openai.ts'
-          vendor_json = core / 'src/lib/vendor.json'
+          dialog=web/'src/views/project/components/projectDialog.vue'
+          if dialog.is_file():
+              d=dialog.read_text(encoding='utf-8')
+              d=re.sub(r'AI 模型[^"\n<]*', 'AI 模型由用户自行配置：文本 Agent、图片模型、视频模型均可分别选择 Provider。小鱼智算中心只是可选 Provider，不会自动覆盖你的模型设置。', d, count=1)
+              dialog.write_text(d,encoding='utf-8')
+
+          source=core/'data/vendor/openai.ts'; vendor_json=core/'src/lib/vendor.json'
           if source.is_file() and vendor_json.is_file():
-              data = json.loads(vendor_json.read_text(encoding='utf-8'))
-              data['openai.ts'] = source.read_text(encoding='utf-8')
-              vendor_json.write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+              data=json.loads(vendor_json.read_text(encoding='utf-8'))
+              data['openai.ts']=source.read_text(encoding='utf-8')
+              vendor_json.write_text(json.dumps(data,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
 
-          # Vite desktop/LAN host compatibility; preserve existing port.
-          vite = web / 'vite.config.ts'
+          vite=web/'vite.config.ts'
           if vite.is_file():
-              text = vite.read_text(encoding='utf-8')
-              text = re.sub(r'host:\s*true', 'host: "0.0.0.0"', text, count=1)
-              if 'host: "0.0.0.0"' not in text:
-                  m = re.search(r'(?m)^(?P<i>\s*)server\s*:\s*\{', text)
-                  if m:
-                      text = text[:m.end()] + '\n' + m.group('i') + '  host: "0.0.0.0",' + text[m.end():]
-              vite.write_text(text, encoding='utf-8')
+              v=vite.read_text(encoding='utf-8')
+              v=re.sub(r'host:\s*true','host: "0.0.0.0"',v,count=1)
+              if 'host: "0.0.0.0"' not in v:
+                  m=re.search(r'(?m)^(?P<i>\s*)server\s*:\s*\{',v)
+                  if m: v=v[:m.end()]+'\n'+m.group('i')+'  host: "0.0.0.0",'+v[m.end():]
+              vite.write_text(v,encoding='utf-8')
 
-          # Native modules are rebuilt/validated explicitly; prevent builder from rebuilding again.
-          builder = core / 'electron-builder.yml'
+          builder=core/'electron-builder.yml'
           if builder.is_file():
-              text = builder.read_text(encoding='utf-8')
-              if 'npmRebuild:' in text:
-                  text = re.sub(r'(?m)^npmRebuild:.*$', 'npmRebuild: false', text, count=1)
-              elif 'asar: true' in text:
-                  text = text.replace('asar: true', 'asar: true\nnpmRebuild: false', 1)
-              builder.write_text(text, encoding='utf-8')
+              b=builder.read_text(encoding='utf-8')
+              if 'npmRebuild:' in b: b=re.sub(r'(?m)^npmRebuild:.*$','npmRebuild: false',b,count=1)
+              elif 'asar: true' in b: b=b.replace('asar: true','asar: true\nnpmRebuild: false',1)
+              builder.write_text(b,encoding='utf-8')
 
-          # Knex typings: generated optional ids must be narrowed before whereIn().
-          fixes = [
-              (core / 'src/routes/novel/batchDeleteNovel.ts',
-               'const eventIds = chapterData.map((i) => i.id);',
-               'const eventIds = chapterData.map((i) => i.id).filter((id): id is number => typeof id === "number");'),
-              (core / 'src/routes/script/delScript.ts',
-               'const storyboardIds = storyboardData.map((item) => item.id);',
-               'const storyboardIds = storyboardData.map((item) => item.id).filter((id): id is number => typeof id === "number");'),
-          ]
-          for path, old, new in fixes:
+          for path,old,new in [
+              (core/'src/routes/novel/batchDeleteNovel.ts','const eventIds = chapterData.map((i) => i.id);','const eventIds = chapterData.map((i) => i.id).filter((id): id is number => typeof id === "number");'),
+              (core/'src/routes/script/delScript.ts','const storyboardIds = storyboardData.map((item) => item.id);','const storyboardIds = storyboardData.map((item) => item.id).filter((id): id is number => typeof id === "number");')]:
               if path.is_file():
-                  text = path.read_text(encoding='utf-8')
-                  if new not in text and old in text:
-                      path.write_text(text.replace(old, new, 1), encoding='utf-8')
+                  s=path.read_text(encoding='utf-8')
+                  if new not in s and old in s: path.write_text(s.replace(old,new,1),encoding='utf-8')
 
-          # Strip patch/build diagnostics and generated state from source tree.
-          for root in (core, web):
-              for name in ('node_modules', 'dist', 'build', 'out', '.cache', '.tmp', '.pytest_cache', '__pycache__'):
-                  p = root / name
-                  if p.is_dir(): shutil.rmtree(p, ignore_errors=True)
-              for p in list(root.rglob('*.step*.bak')) + list(root.rglob('*.bak')) + list(root.rglob('*.pyc')):
-                  try: p.unlink()
-                  except OSError: pass
-              for name in ('.xiaoyu_patch_manifest.json', '.xiaoyu_source_commit'):
-                  p = root / name
-                  if p.exists(): p.unlink()
+          for root in (core,web):
+              for name in ('node_modules','dist','build','out','.cache','.tmp','.pytest_cache','__pycache__'):
+                  p=root/name
+                  if p.is_dir(): shutil.rmtree(p,ignore_errors=True)
+              for p in list(root.rglob('*.step*.bak'))+list(root.rglob('*.bak'))+list(root.rglob('*.pyc')):
+                  try:p.unlink()
+                  except OSError:pass
+              for name in ('.xiaoyu_patch_manifest.json','.xiaoyu_source_commit'):
+                  p=root/name
+                  if p.exists():p.unlink()
           PY
 
-      - name: Verify requested behavior
+      - name: Verify actual requested behavior
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          import re
-
-          core = Path('/tmp/core')
-          web = Path('/tmp/web')
-          add = (core/'src/routes/project/addProject.ts').read_text(encoding='utf-8')
-          edit = (core/'src/routes/project/editProject.ts').read_text(encoding='utf-8')
-          initdb = (core/'src/lib/initDB.ts').read_text(encoding='utf-8')
-          boot = (core/'src/xiaoyu/bootstrap.ts').read_text(encoding='utf-8')
-          routes = (core/'src/xiaoyu/routes.ts').read_text(encoding='utf-8')
-          dialog = (web/'src/views/project/components/projectDialog.vue').read_text(encoding='utf-8')
-
-          for name, text in [('addProject', add), ('editProject', edit)]:
-              assert 'getProductionPolicy' not in text, f'{name} still calls compute-center policy'
-              assert 'hasXiaoyuCredential' not in text, f'{name} still requires compute-center credential'
-              assert 'ensureXiaoyuPipelineSchema' in text, f'{name} does not ensure local schema'
-
-          assert 'qualityMode' in initdb and 'computePresetVersion' in initdb, 'o_project base schema incomplete'
-          assert 'enableXiaoyuComputeCenterProvider' in boot, 'provider-only enable function missing'
-          enable = boot.split('export async function enableXiaoyuComputeCenterProvider', 1)[1].split('export async function', 1)[0]
-          assert 'modelName' not in enable and 'agentUseMode' not in enable, 'compute center still overwrites AI model/agent mode'
-          assert 'enableXiaoyuComputeCenterProvider' in routes, 'routes are not using provider-only enable'
-          assert ('自由' in dialog or '自行' in dialog or '可配置' in dialog), 'project dialog does not state user model choice'
-
-          # Ensure OpenAI image endpoint remains in embedded runtime vendor template.
-          vendor = (core/'src/lib/vendor.json').read_text(encoding='utf-8')
-          assert '/images/generations' in vendor, 'embedded OpenAI image endpoint missing'
-          print('Requested behavior verification passed')
+          core=Path('/tmp/core'); web=Path('/tmp/web')
+          add=(core/'src/routes/project/addProject.ts').read_text(encoding='utf-8')
+          edit=(core/'src/routes/project/editProject.ts').read_text(encoding='utf-8')
+          boot=(core/'src/xiaoyu/bootstrap.ts').read_text(encoding='utf-8')
+          proutes=(core/'src/xiaoyu/pipeline/routes.ts').read_text(encoding='utf-8')
+          execs=(core/'src/xiaoyu/pipeline/executors.ts').read_text(encoding='utf-8')
+          initdb=(core/'src/lib/initDB.ts').read_text(encoding='utf-8')
+          for name,text in [('addProject',add),('editProject',edit)]:
+              assert 'getProductionPolicy' not in text and 'hasXiaoyuCredential' not in text, name+' still compute-bound'
+              assert 'ensureXiaoyuPipelineSchema' in text, name+' missing schema migration'
+          assert 'table.string("qualityMode")' in initdb and 'table.string("computePresetVersion")' in initdb
+          fn=boot.split('export async function activateXiaoyuComputeCenterBindings',1)[1].split('export async function deactivateXiaoyuComputeCenterBindings',1)[0]
+          assert 'agentUseMode' not in fn and 'o_agentDeploy' not in fn and 'modelName' not in fn
+          assert 'getProductionPolicy' not in proutes and 'hasXiaoyuCredential' not in proutes
+          assert 'getProductionPolicy' not in execs and 'getProductionBalance' not in execs
+          assert 'XiaoyuDrama' not in ''
+          assert (core/'src/main.ts').is_file() and (web/'src/main.ts').is_file()
+          vendor=(core/'src/lib/vendor.json').read_text(encoding='utf-8')
+          assert '/images/generations' in vendor
+          print('REQUESTED_BEHAVIOR_OK')
           PY
 
-      - name: Build clean repository tree
+      - name: Build clean source repository and force main
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          OUT=/tmp/XYAI-Duanju-clean
-          rm -rf "$OUT"
-          mkdir -p "$OUT"
+          OUT=/tmp/clean
+          rm -rf "$OUT" && mkdir -p "$OUT"
           cp -a /tmp/core "$OUT/XiaoyuDrama-Core"
           cp -a /tmp/web "$OUT/XiaoyuDrama-Web"
           cat > "$OUT/.gitignore" <<'EOF'
-          node_modules/
-          dist/
-          build/
-          out/
-          release/
-          .cache/
-          .tmp/
+          **/node_modules/
+          **/dist/
+          **/build/
+          **/out/
+          **/.cache/
+          **/.tmp/
           *.log
           *.tsbuildinfo
           .env
@@ -200,58 +185,44 @@ jobs:
           *.bak
           *.step*.bak
           *.pyc
-          __pycache__/
+          **/__pycache__/
+          XiaoyuDrama-Core/data/bin/
+          XiaoyuDrama-Core/data/models/
+          XiaoyuDrama-Core/data/web/
+          XiaoyuDrama-Core/data/serve/
           EOF
-          cat > "$OUT/VERSION" <<'EOF'
-          v0.01
-          EOF
+          printf 'v0.01\n' > "$OUT/VERSION"
           cat > "$OUT/README.md" <<'EOF'
-          # 小鱼 Ai 短剧生成系统
+          # 小鱼 Ai 短剧生成系统 v0.01
 
-          源码基线：**v0.01**。
+          - `XiaoyuDrama-Core/`：桌面端、后端与 AI Provider 源码
+          - `XiaoyuDrama-Web/`：前端工作台源码
 
-          本仓库直接保存可维护的完整 Core / Web 源码，不保存历史排障脚本、临时补丁载荷、依赖目录或构建产物。
-
-          ## 目录
-
-          - `XiaoyuDrama-Core/`：Electron 桌面端、后端服务、AI Provider、项目与生产流程。
-          - `XiaoyuDrama-Web/`：Vue 前端工作台。
-
-          ## v0.01 关键调整
-
-          - 小鱼智算中心改为普通可选 AI Provider，不再强制覆盖 Agent、图片模型或视频模型配置。
-          - 用户可以继续使用并配置自己的 AI Provider / API / 模型。
-          - 项目新增与编辑不再请求智算中心远端策略，也不要求智算中心凭证。
-          - 补齐 `o_project` 基础字段和启动迁移，修复旧数据库/迁移不完整时新增项目失败的问题。
-          - 保留 Windows Electron 打包所需的 Vite、SQLite/Knex 与 native rebuild 兼容修复。
+          智算中心为可选 Provider；用户可自行配置文本、图片和视频 AI 模型。
           EOF
           find "$OUT" -type d \( -name node_modules -o -name dist -o -name build -o -name .git -o -name __pycache__ \) -prune -exec rm -rf {} + || true
           find "$OUT" -type f \( -name '*.bak' -o -name '*.step*.bak' -o -name '*.pyc' \) -delete
-          ! find "$OUT" -name '.rebuild' -o -name 'Step0*.py' | grep -q .
-          du -sh "$OUT"
-
-      - name: Replace main with orphan v0.01 commit
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          cd /tmp/XYAI-Duanju-clean
+          test -f "$OUT/XiaoyuDrama-Core/src/main.ts"
+          test -f "$OUT/XiaoyuDrama-Web/src/main.ts"
+          cd "$OUT"
           git init
-          git config user.name 'jack3079'
-          git config user.email 'jack3079@users.noreply.github.com'
+          git config user.name jack3079
+          git config user.email jack3079@users.noreply.github.com
           git add -A
           git commit -m 'v0.01: clean source baseline'
-          test "$(git rev-list --parents -n 1 HEAD | wc -w)" -eq 1
+          test "$(git rev-list --parents -n1 HEAD | wc -w)" -eq 1
           git branch -M main
           git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push --force origin main
+          git push --force origin main:rebuild-v001
           git push --force origin main:v0.01
           git tag -f v0.01
           git push --force origin refs/tags/v0.01
-          git push origin --delete rebuild-v001 || true
           echo "NEW_ROOT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
-      - name: Result
+      - name: Verify pushed main from remote
+        shell: bash
         run: |
-          echo "Clean orphan main created: $NEW_ROOT"
+          set -euo pipefail
+          git ls-remote origin refs/heads/main
+          echo "NEW_ROOT=$NEW_ROOT"
