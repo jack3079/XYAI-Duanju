@@ -1,0 +1,6 @@
+[submodule "base/XiaoyuDrama-Core"]
+	path = base/XiaoyuDrama-Core
+	url = https://github.com/HBAI-Ltd/Toonflow-app.git
+[submodule "base/XiaoyuDrama-Web"]
+	path = base/XiaoyuDrama-Web
+	url = https://github.com/HBAI-Ltd/Toonflow-web.git
