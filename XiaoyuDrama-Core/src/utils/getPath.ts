@@ -1,41 +1,89 @@
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
 import isPathInside from "is-path-inside";
 
-function firstSegment(fileName?: string[] | string): string {
-  if (!fileName) return "";
-  if (Array.isArray(fileName)) return String(fileName[0] || "");
-  return String(fileName).replace(/\\/g, "/").split("/")[0] || "";
+const SEEDED_MUTABLE_DIRS = new Set(["vendor", "skills", "modelPrompt"]);
+const BUNDLED_ONLY_DIRS = new Set(["models", "assets", "web", "bin"]);
+const seeded = new Set<string>();
+
+function bundledDataRoot(): string {
+  if (typeof process.versions?.electron !== "undefined") {
+    const { app } = require("electron");
+    return path.join(app.getPath("userData"), "data");
+  }
+  return path.join(process.cwd(), "data");
 }
 
-function seedBundledDirectory(runtimeRoot: string, name: string): void {
-  const target = path.join(runtimeRoot, name);
-  if (fs.existsSync(target)) return;
-  const bundled = path.join(process.cwd(), "data", name);
-  if (!fs.existsSync(bundled)) return;
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.cpSync(bundled, target, { recursive: true });
+function persistentDataRoot(): string | null {
+  const configured = String(process.env.XIAOYU_DATA_DIR || "").trim();
+  if (!configured) return null;
+  return path.resolve(configured);
+}
+
+function firstSegment(fileName: string[] | string): string {
+  const first = Array.isArray(fileName) ? String(fileName[0] || "") : String(fileName || "");
+  return first.replace(/^[\\/]+/, "").split(/[\\/]/, 1)[0] || "";
+}
+
+function copyMissing(source: string, target: string): void {
+  if (!fs.existsSync(source)) return;
+  const stat = fs.statSync(source);
+  if (stat.isDirectory()) {
+    fs.mkdirSync(target, { recursive: true });
+    for (const entry of fs.readdirSync(source)) {
+      copyMissing(path.join(source, entry), path.join(target, entry));
+    }
+    return;
+  }
+  if (!fs.existsSync(target)) {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.copyFileSync(source, target);
+  }
+}
+
+function ensureSeededDirectory(name: string, persistentRoot: string): void {
+  if (seeded.has(name)) return;
+  const source = path.join(bundledDataRoot(), name);
+  const target = path.join(persistentRoot, name);
+  copyMissing(source, target);
+  seeded.add(name);
 }
 
 export default (fileName?: string[] | string) => {
-  let basePath: string;
-  if (typeof process.versions?.electron !== "undefined") {
-    const { app } = require("electron");
-    const userDataDir: string = app.getPath("userData");
-    basePath = path.join(userDataDir, "data");
-  } else {
-    const configuredDataDir = String(process.env.XIAOYU_DATA_DIR || "").trim();
-    const runtimeRoot = configuredDataDir ? path.resolve(configuredDataDir) : "";
-    const segment = firstSegment(fileName);
-    if (runtimeRoot && segment === "skills") seedBundledDirectory(runtimeRoot, "skills");
-    const bundledOnly = segment === "web" || segment === "assets";
-    basePath = runtimeRoot && !bundledOnly ? runtimeRoot : path.join(process.cwd(), "data");
+  const bundledRoot = path.resolve(bundledDataRoot());
+  const persistentRoot = persistentDataRoot();
+
+  if (!persistentRoot) {
+    if (!fileName) return bundledRoot;
+    const result = Array.isArray(fileName)
+      ? path.resolve(bundledRoot, ...fileName)
+      : path.resolve(bundledRoot, fileName);
+    if (!isPathInside(result, bundledRoot) && result !== bundledRoot) {
+      throw new Error("路径逃逸错误，路径必须在数据目录内");
+    }
+    return result;
   }
-  if (fileName) {
-    const resolved = Array.isArray(fileName) ? path.resolve(basePath, ...fileName) : path.resolve(basePath, fileName);
-    if (!isPathInside(resolved, basePath) && resolved !== basePath) throw new Error("路径逃逸错误，路径必须在数据目录内");
-    return resolved;
+
+  fs.mkdirSync(persistentRoot, { recursive: true });
+  if (!fileName) return persistentRoot;
+
+  const segment = firstSegment(fileName);
+  let root = persistentRoot;
+  if (BUNDLED_ONLY_DIRS.has(segment)) {
+    root = bundledRoot;
+  } else if (SEEDED_MUTABLE_DIRS.has(segment)) {
+    ensureSeededDirectory(segment, persistentRoot);
   }
-  return basePath;
+
+  const result = Array.isArray(fileName)
+    ? path.resolve(root, ...fileName)
+    : path.resolve(root, fileName);
+  if (!isPathInside(result, root) && result !== root) {
+    throw new Error("路径逃逸错误，路径必须在数据目录内");
+  }
+  return result;
 };
-export function isEletron() { return typeof process.versions?.electron !== "undefined"; }
+
+export function isEletron() {
+  return typeof process.versions?.electron !== "undefined";
+}
