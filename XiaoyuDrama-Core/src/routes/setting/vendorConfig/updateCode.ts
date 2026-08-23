@@ -14,9 +14,7 @@ const vendorConfigSchema = z.object({
   description: z.string().optional(),
   name: z.string(),
   icon: z.string().optional(),
-  inputs: z.array(z.object({
-    key: z.string(), label: z.string(), type: z.enum(["text", "password", "url"]), required: z.boolean(), placeholder: z.string().optional(),
-  })),
+  inputs: z.array(z.object({ key: z.string(), label: z.string(), type: z.enum(["text", "password", "url"]), required: z.boolean(), placeholder: z.string().optional() })),
   inputValues: z.record(z.string(), z.string()),
   models: z.array(z.discriminatedUnion("type", [
     z.object({ name: z.string(), modelName: z.string(), type: z.literal("text"), think: z.boolean() }),
@@ -53,17 +51,19 @@ export default router.post(
       if (declared.has("image") && !exports.imageRequest) return res.status(400).send(error("已声明图片模型，但脚本未导出 imageRequest"));
       if (declared.has("video") && !exports.videoRequest) return res.status(400).send(error("已声明视频模型，但脚本未导出 videoRequest"));
 
-      u.vendor.writeCode(id, tsCode);
       const existing = await u.db("o_vendorConfig").where("id", id).first("id");
       if (existing) {
-        await u.db("o_vendorConfig").where("id", id).update({ models: JSON.stringify(result.data.models ?? []) });
+        // DB 的 models 字段只保存用户新增/覆盖项，编辑 Provider 脚本不能清空它。
+        // writeCode 使用临时文件 + rename，写入失败时旧脚本仍保留。
+        u.vendor.writeCode(id, tsCode);
       } else {
-        await u.db("o_vendorConfig").insert({
-          id,
-          inputValues: JSON.stringify(result.data.inputValues ?? {}),
-          models: JSON.stringify(result.data.models ?? []),
-          enable: 0,
-        });
+        await u.db("o_vendorConfig").insert({ id, inputValues: JSON.stringify(result.data.inputValues ?? {}), models: JSON.stringify([]), enable: 0 });
+        try {
+          u.vendor.writeCode(id, tsCode);
+        } catch (exception) {
+          await u.db("o_vendorConfig").where("id", id).delete();
+          throw exception;
+        }
       }
       res.status(200).send(success(result.data));
     } catch (exception) {
