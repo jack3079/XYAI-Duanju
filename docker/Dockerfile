@@ -3,13 +3,28 @@
 FROM node:24-bookworm-slim AS source
 WORKDIR /work
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates git python3 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY base/XiaoyuDrama-Core/ /work/core/
-COPY base/XiaoyuDrama-Web/ /work/web/
-COPY docker/patchkit/ /tmp/patchkit-parts/
+ARG CORE_REPO=https://github.com/HBAI-Ltd/Toonflow-app.git
+ARG CORE_COMMIT=bc61ec7a1b5df31293b286981a5f4ad4635464ee
+ARG WEB_REPO=https://github.com/HBAI-Ltd/Toonflow-web.git
+ARG WEB_COMMIT=9c4cb0ec7d4f6b4067c7768e2df8cdc7f8587214
 
+RUN git init /work/core \
+    && git -C /work/core remote add origin "$CORE_REPO" \
+    && git -C /work/core fetch --depth=1 origin "$CORE_COMMIT" \
+    && git -C /work/core checkout --detach FETCH_HEAD \
+    && test "$(git -C /work/core rev-parse HEAD)" = "$CORE_COMMIT" \
+    && rm -rf /work/core/.git \
+    && git init /work/web \
+    && git -C /work/web remote add origin "$WEB_REPO" \
+    && git -C /work/web fetch --depth=1 origin "$WEB_COMMIT" \
+    && git -C /work/web checkout --detach FETCH_HEAD \
+    && test "$(git -C /work/web rev-parse HEAD)" = "$WEB_COMMIT" \
+    && rm -rf /work/web/.git
+
+COPY docker/patchkit/ /tmp/patchkit-parts/
 RUN cat /tmp/patchkit-parts/part-*.txt | tr -d '\r\n' > /tmp/patchkit.b64 \
     && base64 -d /tmp/patchkit.b64 > /tmp/patchkit.tar.xz \
     && echo 'c47e45329687bfc5fb9ca44aaf2d199d2f515101dfb470582bb6986d35e401b0  /tmp/patchkit.tar.xz' | sha256sum -c - \
@@ -24,9 +39,9 @@ RUN cat /tmp/patchkit-parts/part-*.txt | tr -d '\r\n' > /tmp/patchkit.b64 \
     && if echo "$HELP" | grep -q -- '--update-public-key-b64'; then set -- "$@" --update-public-key-b64 ''; fi \
     && if echo "$HELP" | grep -q -- '--app-version'; then set -- "$@" --app-version '0.0.1'; fi \
     && if echo "$HELP" | grep -q -- '--version' && ! echo "$HELP" | grep -q -- '--app-version'; then set -- "$@" --version '0.0.1'; fi \
-    && if echo "$HELP" | grep -q -- '--source-commit'; then set -- "$@" --source-commit 'bc61ec7a1b5df31293b286981a5f4ad4635464ee'; fi \
-    && if echo "$HELP" | grep -q -- '--web-source-commit'; then set -- "$@" --web-source-commit '9c4cb0ec7d4f6b4067c7768e2df8cdc7f8587214'; fi \
-    && if echo "$HELP" | grep -q -- '--core-source-commit'; then set -- "$@" --core-source-commit 'bc61ec7a1b5df31293b286981a5f4ad4635464ee'; fi \
+    && if echo "$HELP" | grep -q -- '--source-commit'; then set -- "$@" --source-commit "$CORE_COMMIT"; fi \
+    && if echo "$HELP" | grep -q -- '--web-source-commit'; then set -- "$@" --web-source-commit "$WEB_COMMIT"; fi \
+    && if echo "$HELP" | grep -q -- '--core-source-commit'; then set -- "$@" --core-source-commit "$CORE_COMMIT"; fi \
     && PYTHONPATH="$PKROOT/tools${PYTHONPATH:+:$PYTHONPATH}" python3 "$PATCHER" "$@"
 
 COPY XiaoyuDrama-Core/ /work/core/
@@ -44,7 +59,7 @@ RUN rm -rf /work/core/node_modules /work/core/dist /work/core/build \
 FROM node:24-bookworm-slim AS backend
 WORKDIR /app
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 make g++ ffmpeg ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates ffmpeg g++ make python3 \
     && rm -rf /var/lib/apt/lists/* \
     && corepack enable \
     && corepack prepare yarn@1.22.22 --activate
