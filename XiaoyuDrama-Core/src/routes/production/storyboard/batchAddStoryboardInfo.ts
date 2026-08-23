@@ -3,7 +3,7 @@ import u from "@/utils";
 import { z } from "zod";
 import { error, success } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
-import { assertProjectScript, createUniqueVideoTrackId } from "../trackUtils";
+import { assertProjectScript, createUniqueVideoTrackId } from "@/utils/productionTrack";
 
 const router = express.Router();
 const storyboardSchema = z.object({
