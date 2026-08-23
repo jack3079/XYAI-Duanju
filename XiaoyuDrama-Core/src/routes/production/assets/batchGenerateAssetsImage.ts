@@ -78,7 +78,12 @@ export default router.post(
         }
       });
 
-      res.status(200).send(success("开始生成资产图片"));
+      // 现有前端会直接 data.forEach(...) 更新资产状态；必须返回数组而不是提示字符串。
+      res.status(200).send(success(assets.map((asset: any) => ({
+        id: Number(asset.id),
+        state: "生成中",
+        src: "",
+      }))));
 
       const limit = pLimit(concurrentCount);
       const tasks = assets.map((asset: any) => limit(async () => {
