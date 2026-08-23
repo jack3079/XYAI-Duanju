@@ -2,12 +2,8 @@ import express from "express";
 import { z } from "zod";
 import { success, error } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
-import {
-  launchBatchVideoPromptGeneration,
-  prepareVideoPromptContext,
-  validateVideoPromptTask,
-  type VideoPromptTaskInput,
-} from "@/utils/workbenchVideoPrompt";
+import { prepareVideoPromptContext, type VideoPromptTaskInput } from "@/utils/workbenchVideoPrompt";
+import { claimVideoPromptTracks, launchClaimedVideoPromptBatch } from "@/utils/workbenchVideoPromptClaim";
 
 const router = express.Router();
 const modeSchema = z.union([z.string().trim().min(1), z.array(z.string().trim().min(1)).min(1)]);
@@ -43,10 +39,10 @@ export default router.post(
         model,
         mode,
       }));
-      // 在返回“已开始”前完成归属校验，避免错误请求进入后台队列。
-      await Promise.all(inputs.map((input) => validateVideoPromptTask(input)));
+      // 原子占用：一条轨道已在生成则整批回滚，不产生重复模型调用。
+      await claimVideoPromptTracks(inputs);
 
-      launchBatchVideoPromptGeneration(inputs, context, concurrentCount);
+      launchClaimedVideoPromptBatch(inputs, context, concurrentCount);
       res.status(200).send(success("开始生成提示词"));
     } catch (exception) {
       const status = Number((exception as any)?.status || 400);

@@ -2,11 +2,8 @@ import express from "express";
 import { z } from "zod";
 import { success, error } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
-import {
-  generateTrackVideoPrompt,
-  prepareVideoPromptContext,
-  type VideoPromptTaskInput,
-} from "@/utils/workbenchVideoPrompt";
+import { prepareVideoPromptContext, type VideoPromptTaskInput } from "@/utils/workbenchVideoPrompt";
+import { claimVideoPromptTracks, runClaimedVideoPrompt } from "@/utils/workbenchVideoPromptClaim";
 
 const router = express.Router();
 const modeSchema = z.union([z.string().trim().min(1), z.array(z.string().trim().min(1)).min(1)]);
@@ -28,7 +25,8 @@ export default router.post(
     const input = req.body as VideoPromptTaskInput;
     try {
       const context = await prepareVideoPromptContext(input.projectId, input.model, input.mode);
-      const text = await generateTrackVideoPrompt(input, context);
+      await claimVideoPromptTracks([input]);
+      const text = await runClaimedVideoPrompt(input, context);
       res.status(200).send(success(text));
     } catch (exception) {
       const status = Number((exception as any)?.status || 502);
