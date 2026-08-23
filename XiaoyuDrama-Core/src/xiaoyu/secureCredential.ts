@@ -24,14 +24,29 @@ function primaryCredentialContext(): string {
   return legacyMachineFingerprint();
 }
 
-function loadOrCreateInstallationSecret(): Buffer {
-  const filename = credentialKeyFile();
-  fs.mkdirSync(path.dirname(filename), { recursive: true });
-  if (fs.existsSync(filename)) {
-    const decoded = Buffer.from(fs.readFileSync(filename, "utf-8").trim(), "base64");
-    if (decoded.length !== 32) throw new Error("小鱼本机凭据密钥损坏，请重新配置小鱼智算中心 API Token");
-    return decoded;
+function decodeInstallationSecret(filename: string): Buffer | null {
+  try {
+    const text = fs.readFileSync(filename, "utf-8").trim();
+    if (!text) return null;
+    const decoded = Buffer.from(text, "base64");
+    return decoded.length === 32 ? decoded : null;
+  } catch {
+    return null;
   }
+}
+
+function archiveCorruptSecret(filename: string): void {
+  if (!fs.existsSync(filename)) return;
+  const archived = `${filename}.corrupt-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+  try {
+    fs.renameSync(filename, archived);
+    console.warn(`[xiaoyu] 凭据密钥损坏，已隔离旧文件：${path.basename(archived)}`);
+  } catch {
+    try { fs.rmSync(filename, { force: true }); } catch { /* create below will surface the real error */ }
+  }
+}
+
+function createInstallationSecret(filename: string): Buffer {
   const secret = crypto.randomBytes(32);
   const temporary = `${filename}.${process.pid}.${Date.now()}.tmp`;
   fs.writeFileSync(temporary, secret.toString("base64"), { encoding: "utf-8", mode: 0o600, flag: "wx" });
@@ -39,10 +54,23 @@ function loadOrCreateInstallationSecret(): Buffer {
     fs.renameSync(temporary, filename);
   } catch (exception: any) {
     try { fs.rmSync(temporary, { force: true }); } catch { /* ignore */ }
-    if (!fs.existsSync(filename)) throw exception;
+    const existing = decodeInstallationSecret(filename);
+    if (existing) return existing;
+    throw exception;
   }
   try { fs.chmodSync(filename, 0o600); } catch { /* Windows uses ACL */ }
-  return Buffer.from(fs.readFileSync(filename, "utf-8").trim(), "base64");
+  return secret;
+}
+
+function loadOrCreateInstallationSecret(): Buffer {
+  const filename = credentialKeyFile();
+  fs.mkdirSync(path.dirname(filename), { recursive: true });
+  if (fs.existsSync(filename)) {
+    const existing = decodeInstallationSecret(filename);
+    if (existing) return existing;
+    archiveCorruptSecret(filename);
+  }
+  return createInstallationSecret(filename);
 }
 
 function deriveKey(fingerprint: string): Buffer {
@@ -106,9 +134,7 @@ export function migrateXiaoyuCredential(inputValues: Record<string, unknown>): {
   const credential = String(inputValues.credential || "").trim();
   if (credential) {
     const result = decryptCredential(credential);
-    if (result.usedLegacyContext) {
-      return { credential: encryptXiaoyuCredential(result.token), migrated: true };
-    }
+    if (result.usedLegacyContext) return { credential: encryptXiaoyuCredential(result.token), migrated: true };
     return { credential, migrated: Boolean(inputValues.apiKey) };
   }
   const legacy = String(inputValues.apiKey || "").trim();
