@@ -81,7 +81,6 @@ function parseThumbnailSize(value: unknown): { key: string; options: ThumbnailSi
 async function configureApplication(): Promise<void> {
   if (configured) return;
 
-  // dev 模式先生成 router.ts，再首次 import。旧逻辑先 import 再生成，新路由要重启第二次才生效。
   if (process.env.NODE_ENV === "dev") await buildRoute();
   const { default: routerDefault } = await import("@/router");
 
@@ -167,12 +166,16 @@ async function configureApplication(): Promise<void> {
   await routerDefault(app);
 
   app.use((_req, res) => res.status(404).send({ message: "API 404 Not Found" }));
-  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-    console.error(err);
+  app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
     const status = Number(err?.status || err?.statusCode || 500);
     const safeStatus = Number.isInteger(status) && status >= 400 && status <= 599 ? status : 500;
-    const message = safeStatus >= 500 ? "服务器内部错误" : String(err?.message || "请求失败");
-    res.status(safeStatus).send({ message });
+    const requestId = String(req.headers["x-request-id"] || `xyreq_${u.uuid()}`);
+    const detail = String(err?.message || u.error(err).message || "请求失败");
+    const exposeDetails = process.env.NODE_ENV === "dev" || process.env.XIAOYU_EXPOSE_ERROR_DETAILS === "1";
+    const message = safeStatus >= 500 && !exposeDetails ? "服务器内部错误" : detail;
+    res.setHeader("x-request-id", requestId);
+    console.error(`[API ${requestId}] ${req.method} ${req.originalUrl} -> ${safeStatus}: ${detail}`, err);
+    res.status(safeStatus).send({ message, requestId });
   });
 
   configured = true;
@@ -257,7 +260,6 @@ async function gracefulShutdown(signal: string): Promise<void> {
     console.error("[系统退出] 关闭失败", error);
     process.exitCode = 1;
   } finally {
-    // 未 drain 的任务由 20 秒 hard-exit 兜底，不能提前清掉定时器。
     if (fullyDrained) clearTimeout(hardExit);
   }
 }
