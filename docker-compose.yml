@@ -1,0 +1,36 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: backend
+    environment:
+      NODE_ENV: dev
+      XIAOYU_DATA_DIR: /var/lib/xiaoyu
+      XIAOYU_MIN_FREE_DISK_BYTES: ${XIAOYU_MIN_FREE_DISK_BYTES:-536870912}
+    ports:
+      - "10588:10588"
+    volumes:
+      - xiaoyu-data:/var/lib/xiaoyu
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:10588/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: web
+    ports:
+      - "50188:50188"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  xiaoyu-data:

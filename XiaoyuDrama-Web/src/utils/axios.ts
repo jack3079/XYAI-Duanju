@@ -1,0 +1,11 @@
+import axios from "axios";
+import router from "@/router/index";
+import { storeToRefs } from "pinia";
+import { MessagePlugin,NotifyPlugin } from "tdesign-vue-next";
+import settingStore from "@/stores/setting";
+import { h } from "vue";
+import { normalizeBackendApiUrl } from "@/utils/backendUrl";
+const instance=axios.create();
+instance.interceptors.request.use(config=>{const{baseUrl,otherSetting}=storeToRefs(settingStore());config.baseURL=normalizeBackendApiUrl(baseUrl.value);config.timeout=otherSetting.value.axiosTimeOut;const token=localStorage.getItem("token");if(token)config.headers.Authorization=token;return config;});
+instance.interceptors.response.use(response=>response.data,error=>{if(error?.response?.status===401||error?.status===401){localStorage.removeItem("token");router.push("/login");MessagePlugin.error(window.$t("common.sessionExpired"));}if(String(error?.message||"").includes("Network Error")||error?.response?.data?.message==="Network Error"){NotifyPlugin.error({title:"Network Error",closeBtn:true,duration:3000,className:"customNotifyFull",content:()=>h("div",[h("div",{style:{marginBottom:"8px"}},"网络连接失败，请检查 Docker 后端服务、端口和当前后端地址。")])});}return Promise.reject(error?.response?.data??{message:error?.message||"请求失败"});});
+export default instance;

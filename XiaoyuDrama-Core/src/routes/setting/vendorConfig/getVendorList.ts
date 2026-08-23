@@ -1,33 +1,5 @@
 import express from "express";
 import { success } from "@/lib/responseFormat";
 import u from "@/utils";
-const router = express.Router();
-
-export default router.post("/", async (req, res) => {
-  const data = await u.db("o_vendorConfig").select("*");
-
-  const list = (
-    await Promise.all(
-      data.map(async (item) => {
-        const vendor = u.vendor.getVendor(item.id!);
-        if (!vendor) {
-          await u.db("o_vendorConfig").where("id", item.id).delete();
-          return null
-        };
-        return {
-          ...item,
-          inputValues: JSON.parse(item.inputValues ?? "{}"),
-          models: await u.vendor.getModelList(item.id!),
-          code: u.vendor.getCode(item.id!),
-          description: vendor.description ?? "",
-          inputs: vendor.inputs,
-          author: vendor.author,
-          name: vendor.name,
-          version: vendor.version ?? "1.0",
-        };
-      }),
-    )
-  ).filter((i) => Boolean(i));
-
-  res.status(200).send(success(list));
-});
+const router=express.Router();
+export default router.post("/",async(_req,res)=>{const data=await u.db("o_vendorConfig").select("*");const list=await Promise.all(data.map(async(item)=>{const code=u.vendor.getCode(item.id!);try{const vendor=u.vendor.getVendor(item.id!);if(!vendor)throw new Error("供应商脚本未导出 vendor");let models:any[]=[];try{models=await u.vendor.getModelList(item.id!);}catch(error){console.warn(`[vendor] 读取模型列表失败：${item.id}`,error);}return{...item,inputValues:JSON.parse(item.inputValues??"{}"),models,code,description:vendor.description??"",inputs:vendor.inputs??[],author:vendor.author??"",name:vendor.name??item.id,version:vendor.version??"1.0",invalid:false};}catch(error){console.warn(`[vendor] 供应商脚本无效，保留配置：${item.id}`,error);if(Number(item.enable||0)!==0)await u.db("o_vendorConfig").where("id",item.id).update({enable:0});let inputValues:Record<string,unknown>={};try{inputValues=JSON.parse(item.inputValues??"{}");}catch{}return{...item,enable:0,inputValues,models:[],code,description:"供应商脚本无效，请编辑或重新导入；原 API 配置已保留",inputs:[],author:"",name:item.id,version:"0",invalid:true};}}));res.status(200).send(success(list));});
