@@ -4,21 +4,31 @@ services:
       context: .
       dockerfile: docker/Dockerfile
       target: backend
+    init: true
+    command: ["node", "node_modules/tsx/dist/cli.mjs", "src/app.ts"]
     environment:
       NODE_ENV: dev
+      PORT: 10588
       XIAOYU_DATA_DIR: /var/lib/xiaoyu
       XIAOYU_CREDENTIAL_CONTEXT: ${XIAOYU_CREDENTIAL_CONTEXT:-xiaoyu-docker-v1}
       XIAOYU_MIN_FREE_DISK_BYTES: ${XIAOYU_MIN_FREE_DISK_BYTES:-536870912}
+      XIAOYU_VENDOR_VM_TIMEOUT_MS: ${XIAOYU_VENDOR_VM_TIMEOUT_MS:-3000}
+      XIAOYU_MEDIA_DOWNLOAD_TIMEOUT_MS: ${XIAOYU_MEDIA_DOWNLOAD_TIMEOUT_MS:-120000}
+      XIAOYU_PROVIDER_DOWNLOAD_TIMEOUT_MS: ${XIAOYU_PROVIDER_DOWNLOAD_TIMEOUT_MS:-120000}
+      XIAOYU_PROVIDER_DOWNLOAD_MAX_BYTES: ${XIAOYU_PROVIDER_DOWNLOAD_MAX_BYTES:-268435456}
+      XIAOYU_REMOTE_DOWNLOAD_TIMEOUT_MS: ${XIAOYU_REMOTE_DOWNLOAD_TIMEOUT_MS:-1800000}
+      XIAOYU_PIPELINE_LEASE_MS: ${XIAOYU_PIPELINE_LEASE_MS:-90000}
     ports:
       - "10588:10588"
     volumes:
       - xiaoyu-data:/var/lib/xiaoyu
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:10588/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:10588/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 10s
       timeout: 5s
       retries: 12
       start_period: 30s
+    stop_grace_period: 25s
     restart: unless-stopped
 
   web:
@@ -26,6 +36,8 @@ services:
       context: .
       dockerfile: docker/Dockerfile
       target: web
+    init: true
+    command: ["node", "node_modules/vite/bin/vite.js", "--host", "0.0.0.0", "--port", "50188"]
     environment:
       VITE_BACKEND_PROXY_TARGET: http://backend:10588
     ports:
@@ -33,6 +45,7 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+    stop_grace_period: 10s
     restart: unless-stopped
 
 volumes:
