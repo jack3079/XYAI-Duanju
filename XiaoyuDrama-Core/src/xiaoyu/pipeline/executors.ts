@@ -23,9 +23,9 @@ async function executePreflightStage(ctx: PipelineExecutionContext): Promise<Rec
   if (!sourceCount && !String(ctx.project.intro || "").trim()) throw new Error("项目没有小说原文、剧本或故事简介，无法开始一键生产");
   if (!String(ctx.project.imageModel || "").trim() || !String(ctx.project.videoModel || "").trim()) throw new Error("请在项目中选择图片模型和视频模型");
 
-  const imageRoute = await getModelRouteAvailability(ctx.project.imageModel);
+  const imageRoute = await getModelRouteAvailability(ctx.project.imageModel, "image");
   if (!imageRoute.ok) throw new Error(`图片模型不可用：${imageRoute.reason}；请编辑项目重新选择模型`);
-  const videoRoute = await getModelRouteAvailability(ctx.project.videoModel);
+  const videoRoute = await getModelRouteAvailability(ctx.project.videoModel, "video");
   if (!videoRoute.ok) throw new Error(`视频模型不可用：${videoRoute.reason}；请编辑项目重新选择模型`);
 
   const agentState = await getCustomAgentConfigurationState();
