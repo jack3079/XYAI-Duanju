@@ -33,9 +33,19 @@ export default router.post(
         const builtIn = Array.isArray(vendor?.models) && vendor.models.some((item: any) => String(item?.modelName || "") === modelName);
         return res.status(builtIn ? 400 : 404).send(error(builtIn ? "内置模型不允许删除" : `模型不存在：${modelName}`));
       }
+
       customModels.splice(index, 1);
-      const affected = await u.db("o_vendorConfig").where("id", id).update({ models: JSON.stringify(customModels) });
-      if (affected !== 1) return res.status(409).send(error("供应商配置已变化，请刷新后重试"));
+      const vendor = u.vendor.getVendor(id);
+      const builtInFallback = Array.isArray(vendor?.models) && vendor.models.some((item: any) => String(item?.modelName || "") === modelName);
+      const ref = `${id}:${modelName}`;
+      await u.db.transaction(async (trx: any) => {
+        await trx("o_vendorConfig").where("id", id).update({ models: JSON.stringify(customModels) });
+        if (!builtInFallback) {
+          await trx("o_agentDeploy").where("modelName", ref).update({ vendorId: null, model: null, modelName: null });
+          await trx("o_project").where("imageModel", ref).update({ imageModel: "" });
+          await trx("o_project").where("videoModel", ref).update({ videoModel: "" });
+        }
+      });
       res.status(200).send(success("模型删除成功"));
     } catch (exception) {
       res.status(400).send(error(exception instanceof Error ? exception.message : String(exception)));

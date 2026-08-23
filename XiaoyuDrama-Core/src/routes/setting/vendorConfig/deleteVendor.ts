@@ -15,9 +15,12 @@ export default router.post(
       const { id } = req.body;
       const existing = await u.db("o_vendorConfig").where("id", id).first("id");
       if (!existing) return res.status(404).send(error("供应商不存在"));
+      const prefix = `${id}:%`;
       await u.db.transaction(async (trx: any) => {
-        await trx("o_vendorConfig").where("id", id).del();
-        await trx("o_agentDeploy").where("vendorId", id).update({ model: null, modelName: null, vendorId: null });
+        await trx("o_vendorConfig").where("id", id).delete();
+        await trx("o_agentDeploy").where("vendorId", id).orWhere("modelName", "like", prefix).update({ model: null, modelName: null, vendorId: null });
+        await trx("o_project").where("imageModel", "like", prefix).update({ imageModel: "" });
+        await trx("o_project").where("videoModel", "like", prefix).update({ videoModel: "" });
       });
       u.vendor.deleteCode(id);
       res.status(200).send(success("删除成功"));
