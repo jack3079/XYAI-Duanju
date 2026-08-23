@@ -3,6 +3,7 @@ import u from "@/utils";
 import { z } from "zod";
 import { error, success } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
+import { scriptsActiveWorkMessage } from "@/utils/activeWorkGuard";
 
 const router = express.Router();
 const ACTIVE_RUN_STATUSES = ["queued", "running", "pause_requested", "cancel_requested"];
@@ -29,6 +30,11 @@ export default router.post(
       if (!scripts.length) return res.status(404).send(error("未找到需要删除的剧集"));
       const scriptIds = scripts.map((row: any) => Number(row.id));
       const projectIds = [...new Set(scripts.map((row: any) => Number(row.projectId || 0)).filter((id: number) => id > 0))];
+
+      const manualWork = await scriptsActiveWorkMessage(scriptIds);
+      if (manualWork) {
+        return res.status(409).send(error(`所选剧集仍有后台生成任务正在执行：${manualWork}。请等待任务结束后再删除`));
+      }
 
       if (projectIds.length) {
         const activeRun = await u.db("o_xiaoyuPipelineRun")

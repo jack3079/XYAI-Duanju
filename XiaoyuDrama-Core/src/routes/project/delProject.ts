@@ -3,6 +3,7 @@ import u from "@/utils";
 import { z } from "zod";
 import { success, error } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
+import { projectActiveWorkMessage } from "@/utils/activeWorkGuard";
 
 const router = express.Router();
 const ACTIVE_RUN_STATUSES = ["queued", "running", "pause_requested", "cancel_requested"];
@@ -26,6 +27,11 @@ export default router.post(
     try {
       const project = await u.db("o_project").where({ id }).first("id", "name");
       if (!project) return res.status(404).send(error("项目不存在或已删除"));
+
+      const manualWork = await projectActiveWorkMessage(id);
+      if (manualWork) {
+        return res.status(409).send(error(`项目仍有后台生成任务正在执行：${manualWork}。请等待任务结束后再删除项目`));
+      }
 
       const activeRun = await u.db("o_xiaoyuPipelineRun")
         .where({ projectId: id })
@@ -130,7 +136,6 @@ export default router.post(
       try {
         await u.oss.deleteDirectory(`${id}/`);
       } catch (exception) {
-        // 项目目录不存在是正常情况；上面的已记录文件仍已尽力清理。
         console.info(`[删除项目] 项目目录无需清理 ${id}:`, u.error(exception).message);
       }
 
