@@ -17,7 +17,7 @@ function parseImageBase64(value: string): { buffer: Buffer; ext: string } {
 
   let ext = "";
   if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) ext = "jpg";
-  else if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a]))) ext = "png";
+  else if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) ext = "png";
   else if (buffer.length >= 12 && buffer.subarray(0, 4).toString("ascii") === "RIFF" && buffer.subarray(8, 12).toString("ascii") === "WEBP") ext = "webp";
   else if (buffer.length >= 6 && ["GIF87a", "GIF89a"].includes(buffer.subarray(0, 6).toString("ascii"))) ext = "gif";
   if (!ext) throw new Error("仅支持 JPEG、PNG、WebP 或 GIF 图片");
@@ -30,20 +30,31 @@ export default router.post(
     id: z.number().int().positive(),
     projectId: z.number().int().positive(),
     base64: z.string().optional().nullable(),
-    type: z.enum(["role", "scene", "tool", "props"]),
+    // 兼容旧批量素材窗口：生成完成后会再次提交 filePath，但无需重复写文件。
+    filePath: z.string().optional().nullable(),
+    type: z.enum(["role", "scene", "tool", "props"]).optional(),
     prompt: z.string().optional().nullable(),
     imageId: z.number().int().positive().optional().nullable(),
   }),
   async (req, res, next) => {
     const { id, projectId } = req.body;
-    const type = req.body.type === "props" ? "tool" : req.body.type;
     const prompt = String(req.body.prompt || "");
     let newFilePath = "";
     let fileCommitted = false;
 
     try {
-      const asset = await u.db("o_assets").where({ id, projectId }).first("id", "type");
+      const asset = await u.db("o_assets").where({ id, projectId }).first("id", "type", "imageId");
       if (!asset) return res.status(404).send(error("素材不存在或不属于当前项目"));
+
+      // 旧批量窗口的确认动作只需要保存文字修改；图片在 generateAssets 中已经原子绑定。
+      if (!req.body.base64 && req.body.filePath && req.body.imageId == null && req.body.type == null) {
+        const affected = await u.db("o_assets").where({ id, projectId }).update({ prompt });
+        if (affected !== 1) return res.status(409).send(error("素材已变化，请刷新后重试"));
+        return res.status(200).send(success({ imageId: asset.imageId ?? null }, "批量素材已保存"));
+      }
+
+      if (!req.body.type) return res.status(400).send(error("缺少素材类型"));
+      const type = req.body.type === "props" ? "tool" : req.body.type;
       if (String(asset.type || "") !== type && !(String(asset.type || "") === "props" && type === "tool")) {
         return res.status(400).send(error(`素材类型不匹配：当前为 ${asset.type || "未知"}`));
       }
