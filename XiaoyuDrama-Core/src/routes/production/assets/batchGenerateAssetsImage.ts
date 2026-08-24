@@ -2,136 +2,165 @@ import express from "express";
 import pLimit from "p-limit";
 import u from "@/utils";
 import { z } from "zod";
-import { success, error } from "@/lib/responseFormat";
+import { error, success } from "@/lib/responseFormat";
 import { validateFields } from "@/middleware/middleware";
 import { getModelRouteAvailability } from "@/xiaoyu/modelRouting";
 
 const router = express.Router();
+type SupportedType = "role" | "tool" | "scene";
 
-function httpError(status: number, message: string): Error {
-  const exception = new Error(message) as Error & { status?: number };
-  exception.status = status;
-  return exception;
+function artPromptFile(type: SupportedType): string {
+  if (type === "role") return "art_character_derivative";
+  if (type === "scene") return "art_scene_derivative";
+  return "art_prop_derivative";
 }
 
 export default router.post(
   "/",
   validateFields({
-    assetIds: z.array(z.number().int().positive()).min(1).max(100),
+    assetIds: z.array(z.number().int().positive()).min(1).max(200),
     projectId: z.number().int().positive(),
     scriptId: z.number().int().positive(),
-    concurrentCount: z.number().int().min(1).max(10).optional(),
+    concurrentCount: z.number().int().min(1).max(16).optional(),
   }),
-  async (req, res) => {
+  async (req, res, next) => {
     try {
-      const { projectId, scriptId, concurrentCount = 3 } = req.body;
-      const assetIds = [...new Set<number>(req.body.assetIds)];
-      if (assetIds.length !== req.body.assetIds.length) return res.status(400).send(error("资产列表包含重复 id"));
+      const projectId = Number(req.body.projectId);
+      const scriptId = Number(req.body.scriptId);
+      const concurrentCount = Number(req.body.concurrentCount || 5);
+      const assetIds = [...new Set((req.body.assetIds as number[]).map(Number))];
+      if (assetIds.length !== req.body.assetIds.length) return res.status(400).send(error("批量生成包含重复素材 id"));
 
-      const [project, script] = await Promise.all([
-        u.db("o_project").where({ id: projectId }).select("id", "imageModel", "imageQuality", "artStyle").first(),
-        u.db("o_script").where({ id: scriptId, projectId }).first("id"),
-      ]);
+      const project = await u.db("o_project").where({ id: projectId }).first("id", "imageModel", "imageQuality", "artStyle");
       if (!project) return res.status(404).send(error("项目不存在"));
-      if (!script) return res.status(404).send(error("剧集不存在或不属于当前项目"));
+      const script = await u.db("o_script").where({ id: scriptId, projectId }).first("id");
+      if (!script) return res.status(404).send(error("剧本不存在或不属于当前项目"));
 
       const imageModel = String(project.imageModel || "").trim();
       const route = await getModelRouteAvailability(imageModel, "image");
-      if (!route.ok) return res.status(400).send(error(`图片模型不可用：${route.reason}`));
-      const imageQuality = ["1K", "2K", "4K"].includes(String(project.imageQuality)) ? String(project.imageQuality) : "2K";
+      if (!route.ok) return res.status(400).send(error(`项目图片模型不可用：${route.reason}`));
+      const imageQuality = ["1K", "2K", "4K"].includes(String(project.imageQuality || ""))
+        ? String(project.imageQuality) as "1K" | "2K" | "4K"
+        : "2K";
+      const artStyle = String(project.artStyle || "").trim();
+      if (!artStyle) return res.status(400).send(error("项目尚未配置画风"));
 
-      const assets = await u.db("o_assets").where({ projectId }).whereIn("id", assetIds).select("id", "describe", "name", "type", "assetsId", "scriptId");
-      if (assets.length !== assetIds.length) return res.status(400).send(error("部分资产不存在或不属于当前项目"));
-      const wrongScript = assets.find((item: any) => item.scriptId != null && Number(item.scriptId) !== scriptId);
-      if (wrongScript) return res.status(400).send(error(`资产 ${wrongScript.id} 不属于当前剧集`));
+      const assets = await u.db("o_assets")
+        .where({ projectId })
+        .whereIn("id", assetIds)
+        .select("id", "describe", "name", "type", "assetsId");
+      const byId = new Map(assets.map((row: any) => [Number(row.id), row]));
+      const missing = assetIds.filter((id) => !byId.has(id));
+      if (missing.length) return res.status(404).send(error(`以下素材不存在或不属于当前项目：${missing.join("、")}`));
 
-      const parentIds = [...new Set(assets.map((item: any) => Number(item.assetsId || 0)).filter((id: number) => id > 0))];
+      for (const asset of assets as any[]) {
+        const type = String(asset.type || "") as SupportedType;
+        if (!["role", "tool", "scene"].includes(type)) {
+          return res.status(400).send(error(`素材 ${asset.id} 类型 ${asset.type || "未知"} 不支持衍生图片生成`));
+        }
+      }
+
+      const parentIds = [...new Set(assets.map((row: any) => Number(row.assetsId || 0)).filter((id) => id > 0))];
       const parents = parentIds.length
         ? await u.db("o_assets")
             .leftJoin("o_image", "o_assets.imageId", "o_image.id")
             .where("o_assets.projectId", projectId)
             .whereIn("o_assets.id", parentIds)
-            .select("o_assets.id", "o_image.filePath", "o_assets.describe")
+            .select("o_assets.id", "o_assets.describe", "o_image.filePath")
         : [];
-      const parentById = new Map(parents.map((item: any) => [Number(item.id), item]));
+      const parentMap = new Map(parents.map((row: any) => [Number(row.id), row]));
 
-      const promptRecord: Record<string, string> = {
-        role: String(u.getArtPrompt(project.artStyle || "无", "art_skills", "art_character_derivative") || ""),
-        tool: String(u.getArtPrompt(project.artStyle || "无", "art_skills", "art_prop_derivative") || ""),
-        scene: String(u.getArtPrompt(project.artStyle || "无", "art_skills", "art_scene_derivative") || ""),
-      };
+      const promptByType = new Map<SupportedType, string>();
+      for (const type of ["role", "tool", "scene"] as SupportedType[]) {
+        const prompt = String(u.getArtPrompt(artStyle, "art_skills", artPromptFile(type)) || "");
+        if (!prompt.trim()) return res.status(400).send(error(`画风 ${artStyle} 缺少 ${artPromptFile(type)} 视觉手册`));
+        promptByType.set(type, prompt);
+      }
 
-      const imageIdMap = new Map<number, number>();
+      const jobs: Array<{ asset: any; imageId: number }> = [];
       await u.db.transaction(async (trx: any) => {
-        for (const asset of assets) {
-          const [imageId] = await trx("o_image").insert({
+        for (const asset of assets as any[]) {
+          const [rawImageId] = await trx("o_image").insert({
             assetsId: asset.id,
             type: asset.type,
             state: "生成中",
-            resolution: imageQuality,
-            model: imageModel,
             errorReason: null,
+            resolution: imageQuality,
+            model: route.modelId,
           });
+          const imageId = Number(rawImageId);
           const affected = await trx("o_assets").where({ id: asset.id, projectId }).update({ imageId });
-          if (affected !== 1) throw httpError(409, `资产 ${asset.id} 已变化，请刷新后重试`);
-          imageIdMap.set(Number(asset.id), Number(imageId));
+          if (affected !== 1) throw new Error(`素材 ${asset.id} 在任务创建期间已变化`);
+          jobs.push({ asset, imageId });
         }
       });
 
-      // 现有前端会直接 data.forEach(...) 更新资产状态；必须返回数组而不是提示字符串。
-      res.status(200).send(success(assets.map((asset: any) => ({
-        id: Number(asset.id),
-        state: "生成中",
-        src: "",
-      }))));
-
       const limit = pLimit(concurrentCount);
-      const tasks = assets.map((asset: any) => limit(async () => {
-        const imageId = imageIdMap.get(Number(asset.id));
-        if (!imageId) return;
+      const results = await Promise.all(jobs.map(({ asset, imageId }) => limit(async () => {
+        const type = String(asset.type) as SupportedType;
+        let savePath = "";
         try {
-          const parent = parentById.get(Number(asset.assetsId || 0));
-          const system = promptRecord[String(asset.type || "role")] || promptRecord.role;
-          if (!system.trim()) throw new Error(`缺少 ${asset.type || "role"} 资产绘图提示词模板`);
-
+          const parent = parentMap.get(Number(asset.assetsId || 0));
           const { text } = await u.Ai.Text("universalAi").invoke({
-            system,
+            system: promptByType.get(type) || "",
             messages: [{
               role: "user",
-              content: `父级资产描述: ${parent?.describe || "无详细描述"}\n当前资产描述: ${asset.describe || "无详细描述"}`,
+              content: `父级资产描述: ${String(parent?.describe || "无详细描述")}\n当前资产名称: ${String(asset.name || "")}\n当前资产描述: ${String(asset.describe || "无详细描述")}`,
             }],
           });
           const prompt = String(text || "").trim();
-          if (!prompt) throw new Error("文本 Agent 未返回资产图片提示词");
+          if (!prompt) throw new Error("文本模型未返回衍生素材提示词");
           await u.db("o_assets").where({ id: asset.id, projectId }).update({ prompt });
 
-          let referenceList: { type: "image"; base64: string }[] = [];
-          if (parent?.filePath && await u.oss.fileExists(parent.filePath)) {
-            referenceList = [{ type: "image", base64: await u.oss.getImageBase64(parent.filePath) }];
+          let parentBase64: string | null = null;
+          if (parent?.filePath) {
+            try { parentBase64 = await u.oss.getImageBase64(parent.filePath); }
+            catch (exception) { console.warn(`[production] 父素材图片读取失败，将无参考图继续生成：${parent.id}`, exception); }
           }
+
           const image = await u.Ai.Image(imageModel as `${string}:${string}`).run(
-            { prompt, referenceList, size: imageQuality as "1K" | "2K" | "4K", aspectRatio: "16:9" },
+            {
+              prompt,
+              referenceList: parentBase64 ? [{ type: "image", base64: parentBase64 }] : [],
+              size: imageQuality,
+              aspectRatio: "16:9",
+            },
             {
               taskClass: "生成图片",
-              describe: "资产图片生成",
-              relatedObjects: JSON.stringify({ assetId: asset.id, imageId }),
+              describe: `衍生素材图片生成：${String(asset.name || asset.id)}`,
+              relatedObjects: JSON.stringify({ assetId: asset.id, scriptId, type }),
               projectId,
             },
           );
-          const savePath = `${projectId}/assets/${scriptId}/${asset.type || "asset"}/${u.uuid()}.jpg`;
+          savePath = `${projectId}/assets/${scriptId}/${type}/${u.uuid()}.jpg`;
           await image.save(savePath);
-          const affected = await u.db("o_image").where({ id: imageId }).update({ state: "已完成", filePath: savePath, errorReason: null });
-          if (affected !== 1) throw new Error(`图片记录已变化：${imageId}`);
+
+          const applied = await u.db.transaction(async (trx: any) => {
+            const imageRow = await trx("o_image").where({ id: imageId, assetsId: asset.id }).first("id", "state");
+            const assetRow = await trx("o_assets").where({ id: asset.id, projectId }).first("id");
+            if (!imageRow || !assetRow || String(imageRow.state || "") !== "生成中") return false;
+            await trx("o_image").where({ id: imageId }).update({ state: "已完成", errorReason: null, filePath: savePath });
+            return true;
+          });
+          if (!applied) {
+            await u.oss.deleteFile(savePath).catch(() => undefined);
+            return { id: Number(asset.id), state: "生成失败" as const, src: "", errorReason: "素材在生成期间已被删除或取消" };
+          }
+
+          let src = "";
+          try { src = await u.oss.getSmallImageUrl(savePath); } catch { /* DB/file 已成功，预览失败不回滚 */ }
+          return { id: Number(asset.id), state: "已完成" as const, src, errorReason: "" };
         } catch (exception) {
-          const message = u.error(exception).message;
-          console.error(`[资产图片] asset=${asset.id} 生成失败:`, message);
+          const message = u.error(exception).message || "衍生素材图片生成失败";
           await u.db("o_image").where({ id: imageId }).update({ state: "生成失败", errorReason: message }).catch(() => undefined);
+          if (savePath) await u.oss.deleteFile(savePath).catch(() => undefined);
+          return { id: Number(asset.id), state: "生成失败" as const, src: "", errorReason: message };
         }
-      }));
-      void Promise.all(tasks).catch((exception) => console.error("[资产图片] 批量后台任务异常", u.error(exception).message));
+      }))));
+
+      return res.status(200).send(success(results));
     } catch (exception) {
-      const status = Number((exception as any)?.status || 400);
-      res.status(status >= 400 && status <= 599 ? status : 400).send(error(exception instanceof Error ? exception.message : String(exception)));
+      next(exception);
     }
   },
 );
